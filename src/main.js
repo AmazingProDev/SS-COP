@@ -149,10 +149,18 @@ async function processExcel(file) {
 
                 const id = nameKey ? row[nameKey] : (idx + 1);
 
+                const parseCoord = (val) => {
+                    if (typeof val === 'number') return val;
+                    if (typeof val === 'string') {
+                        return parseFloat(val.replace(',', '.'));
+                    }
+                    return parseFloat(val);
+                };
+
                 return {
                     id: id,
-                    lat: parseFloat(row[latKey]),
-                    lng: parseFloat(row[lngKey]),
+                    lat: parseCoord(row[latKey]),
+                    lng: parseCoord(row[lngKey]),
                     original: row
                 };
             }).filter(p => p !== null && !isNaN(p.lat) && !isNaN(p.lng));
