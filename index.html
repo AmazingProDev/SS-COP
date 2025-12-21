@@ -5,7 +5,7 @@
   <meta charset="UTF-8" />
   <link rel="icon" type="image/svg+xml" href="/vite.svg" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>GeoSpatial Analyzer Pro</title>
+  <title>SS-COP Analyzer</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;700&display=swap" rel="stylesheet">
@@ -18,9 +18,10 @@
     <nav class="navbar">
       <div class="brand">
         <div class="logo-icon">🌍</div>
-        <h1>GeoSpatial <span class="highlight">Analyzer</span></h1>
+        <h1>SS-COP <span class="highlight">Analyzer</span></h1>
       </div>
       <div class="controls">
+        <button id="exportHierarchyBtn" class="btn secondary">Export Hierarchy</button>
         <button id="exportBtn" class="btn secondary" disabled>Export Results</button>
       </div>
     </nav>
@@ -69,6 +70,18 @@
           <div class="stat-item">
             <span class="label">Matched</span>
             <span class="value" id="matchedPoints">0</span>
+          </div>
+          <div class="stat-item">
+            <span class="label">Empty SS</span>
+            <span class="value" id="emptySSPoints">0</span>
+          </div>
+        </div>
+
+        <div class="card filters-card" id="filtersCard" style="display: none; margin-top: 1rem;">
+          <h2>Filters</h2>
+          <div class="layer-toggle">
+            <input type="checkbox" id="filterEmptySS">
+            <label for="filterEmptySS">Show Only Empty SS</label>
           </div>
         </div>
       </section>

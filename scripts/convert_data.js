@@ -21,14 +21,14 @@ async function convert() {
         path.join(INPUT_DIR, `${file}.shp`),
         path.join(INPUT_DIR, `${file}.dbf`)
       );
-      
+
       const geojson = await source.read();
       let features = [];
-      
+
       // shapefile.read() returns one feature at a time if loop, 
       // but read() effectively returns the whole object if we iterate properly or consume it.
       // Actually source.read() returns {done, value}. We need to loop.
-      
+
       // Reset reader strategy for 'shapefile' library
       // Correct usage:
       // const features = [];
@@ -41,7 +41,7 @@ async function convert() {
 
       // Re-opening to be safe or just looping correctly
     } catch (e) {
-        console.error("Error setup:", e);
+      console.error("Error setup:", e);
     }
   }
 
@@ -50,18 +50,19 @@ async function convert() {
     console.log(`Processing ${name}...`);
     const features = [];
     const source = await open(
-        path.join(INPUT_DIR, `${file}.shp`),
-        path.join(INPUT_DIR, `${file}.dbf`)
+      path.join(INPUT_DIR, `${file}.shp`),
+      path.join(INPUT_DIR, `${file}.dbf`),
+      { encoding: 'utf-8' }
     );
-    
+
     let result;
     while (!(result = await source.read()).done) {
-        features.push(result.value);
+      features.push(result.value);
     }
 
     const featureCollection = {
-        type: "FeatureCollection",
-        features: features
+      type: "FeatureCollection",
+      features: features
     };
 
     const outPath = path.join(OUTPUT_DIR, `${name}.json`);

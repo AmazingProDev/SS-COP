@@ -11,6 +11,7 @@ const state = {
         communes: null
     },
     emergencyData: [], // Array of rows from emergency excel
+    emergencyDataMap: new Map(), // Map<normalized_commune, row>
     mapLayerGroups: {
         regions: L.layerGroup(),
         provinces: L.layerGroup(),
@@ -48,30 +49,58 @@ const toggleCommunes = document.getElementById('toggleCommunes');
 const resultsTableBody = document.querySelector('#resultsTable tbody');
 const totalPointsEl = document.getElementById('totalPoints');
 const matchedPointsEl = document.getElementById('matchedPoints');
+const emptySSPointsEl = document.getElementById('emptySSPoints');
+const filtersCard = document.getElementById('filtersCard');
+const filterEmptySS = document.getElementById('filterEmptySS');
 const statsCard = document.getElementById('statsCard');
 const exportBtn = document.getElementById('exportBtn');
+const exportHierarchyBtn = document.getElementById('exportHierarchyBtn');
 
 // --- Load Data ---
 async function loadGeoData() {
     updateStatus(true, 'Loading map data...');
     try {
+        const timestamp = new Date().getTime();
         const [regionsRes, provincesRes, communesRes, emergencyRes] = await Promise.all([
-            fetch('/data/regions.json'),
-            fetch('/data/provinces.json'),
-            fetch('/data/communes.json'),
-            fetch('/data/emergency_numbers.xlsx')
+            fetch(`/data/regions.json?v=${timestamp}`),
+            fetch(`/data/provinces.json?v=${timestamp}`),
+            fetch(`/data/communes.json?v=${timestamp}`),
+            fetch(`/data/emergency_numbers.xlsx?v=${timestamp}`)
         ]);
 
         state.layers.regions = await regionsRes.json();
         state.layers.provinces = await provincesRes.json();
         state.layers.communes = await communesRes.json();
 
-        // Parse Emergency Excel
+        // Parse Emergency Excel & Build Map
         const ab = await emergencyRes.arrayBuffer();
         const wb = XLSX.read(ab, { type: 'array' });
         const sheet = wb.Sheets[wb.SheetNames[0]];
         state.emergencyData = XLSX.utils.sheet_to_json(sheet);
-        console.log('Loaded emergency data:', state.emergencyData.length, 'rows');
+
+        // Build Index
+        state.emergencyDataMap.clear();
+        const norm = (str) => String(str || '').trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+
+        state.emergencyData.forEach(row => {
+            const rowCommune = row['Commune SS'] || row['Commune'] || row['COMMUNE'];
+            const rowProvince = row['Province'] || row['PROVINCE'];
+            if (rowCommune) {
+                state.emergencyDataMap.set(norm(rowCommune), row);
+            }
+        });
+
+        console.log('Loaded emergency data:', state.emergencyData.length, 'rows. Indexed:', state.emergencyDataMap.size);
+
+        // Pre-calc BBoxes for fast spatial lookup
+        const calcBBoxes = (fc) => {
+            fc.features.forEach(f => {
+                f.bbox = turf.bbox(f);
+            });
+        };
+        calcBBoxes(state.layers.regions);
+        calcBBoxes(state.layers.provinces);
+        calcBBoxes(state.layers.communes);
 
         renderGeoJson(state.layers.regions, state.mapLayerGroups.regions, {
             color: '#3b82f6', weight: 2, fillOpacity: 0.1
@@ -184,117 +213,147 @@ function analyzePoints() {
     state.mapLayerGroups.points.clearLayers();
     state.processedPoints = [];
 
+    // Reset stats
+    updateStats(state.points.length, 0, 0);
+
+    const CHUNK_SIZE = 200;
+    let currentIndex = 0;
     let matchedCount = 0;
+    let emptySSCount = 0;
+    let layerBuffer = []; // Buffer markers to add to map in batches
 
-    // Use Turf for Point in Polygon
-    // Optimizing: create index or just loop? 
-    // Since we have ~1500 communes, looping for each point might be slow if points > 1000.
-    // But for user-interface speed it's usually acceptable for < 5000 points.
+    // Disable export during processing
+    exportBtn.disabled = true;
 
-    state.points.forEach(point => {
-        const pt = turf.point([point.lng, point.lat]);
+    const norm = (str) => String(str || '').trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 
-        let commune = 'N/A';
-        let province = 'N/A';
-        let region = 'N/A';
+    function processChunk() {
+        const end = Math.min(currentIndex + CHUNK_SIZE, state.points.length);
 
-        // Check Communes (most granular first)
-        // Optimization: If found in a commune, we can likely infer province/region if hierarchical, 
-        // but the request asks to look them up. 'communes' shapefile usually has parent codes, but let's do geometric check to be sure.
+        for (let i = currentIndex; i < end; i++) {
+            const point = state.points[i];
+            const pt = turf.point([point.lng, point.lat]); // lng, lat
 
-        // Check Regions
-        for (const feature of state.layers.regions.features) {
-            if (turf.booleanPointInPolygon(pt, feature)) {
-                region = feature.properties.Nom_Region || feature.properties.Nom_region || feature.properties.NAME;
-                break;
+            let commune = 'N/A';
+            let province = 'N/A';
+            let region = 'N/A';
+
+            // Helper for optimized spatial check
+            const findInLayer = (layer) => {
+                for (const feature of layer.features) {
+                    // Fast rejection using BBox
+                    // BBox format: [minX, minY, maxX, maxY]
+                    // Point format: [lng, lat]
+                    if (feature.bbox) {
+                        const [minX, minY, maxX, maxY] = feature.bbox;
+                        if (point.lng < minX || point.lng > maxX || point.lat < minY || point.lat > maxY) {
+                            continue;
+                        }
+                    } else {
+                        // Fallback calc if missing? Should be there.
+                    }
+
+                    if (turf.booleanPointInPolygon(pt, feature)) {
+                        return feature.properties.Nom_Region || feature.properties.Nom_Provin || feature.properties.Nom_Commun || feature.properties.NAME || 'N/A';
+                    }
+                }
+                return 'N/A';
+            };
+
+            // Order matters? Regions -> Provinces -> Communes
+            // Actually independent checks as per original code.
+            region = findInLayer(state.layers.regions);
+            province = findInLayer(state.layers.provinces);
+            commune = findInLayer(state.layers.communes);
+
+            // --- Emergency Lookup (Map O(1)) ---
+            let emergencyInfo = {
+                '141': '', '5757': '', '15': '', '19': '', '112': '', '177': ''
+            };
+
+            if (commune !== 'N/A') {
+                const match = state.emergencyDataMap.get(norm(commune));
+                if (match) {
+                    if (match['141']) emergencyInfo['141'] = match['141'];
+                    if (match['5757']) emergencyInfo['5757'] = match['5757'];
+                    if (match['15']) emergencyInfo['15'] = match['15'];
+                    if (match['19']) emergencyInfo['19'] = match['19'];
+                    if (match['112']) emergencyInfo['112'] = match['112'];
+                    if (match['177']) emergencyInfo['177'] = match['177'];
+                }
             }
+
+            const result = {
+                ...point,
+                region, province, commune, ...emergencyInfo
+            };
+
+            state.processedPoints.push(result);
+
+            if (commune !== 'N/A' || province !== 'N/A') matchedCount++;
+
+            // Calculate Empty SS: All emergency numbers are empty
+            const hasSSData = emergencyInfo['141'] || emergencyInfo['5757'] || emergencyInfo['15'] || emergencyInfo['19'] || emergencyInfo['112'] || emergencyInfo['177'];
+            if (!hasSSData) {
+                emptySSCount++;
+                result._isEmptySS = true; // Use result obj
+            } else {
+                result._isEmptySS = false;
+            }
+
+            // Marker
+            // Find which keys have data (DEBUG)
+            const foundKeys = Object.keys(emergencyInfo).filter(k => emergencyInfo[k]).join(', ');
+
+            const marker = L.circleMarker([point.lat, point.lng], {
+                radius: 6,
+                fillColor: (!hasSSData) ? '#f97316' : '#ef4444',
+                color: '#fff',
+                weight: 1,
+                opacity: 1,
+                fillOpacity: 0.8
+            }).bindPopup(`
+              <b>${point.id}</b><br>
+              Commune: ${commune}<br>
+              Province: ${province}<br>
+              Region: ${region}<br>
+              SS Data Found: ${foundKeys || 'None'}
+            `);
+            layerBuffer.push(marker);
         }
 
-        // Check Provinces
-        for (const feature of state.layers.provinces.features) {
-            if (turf.booleanPointInPolygon(pt, feature)) {
-                province = feature.properties.Nom_Provin || feature.properties.Nom_provin || feature.properties.NAME;
-                break;
-            }
+        // Add buffer to map
+        // optimization: addLayer is fast, but adding thousands is slow. LayerGroup handle it ok?
+        // Maybe add chunk to a temp group then merge?
+        // Just adding directly is fine for 200 items.
+        layerBuffer.forEach(m => m.addTo(state.mapLayerGroups.points));
+        layerBuffer = [];
+
+        currentIndex = end;
+        updateStatus(true, `Processed ${currentIndex} / ${state.points.length} points...`);
+        updateStats(state.points.length, matchedCount, emptySSCount);
+
+        if (currentIndex < state.points.length) {
+            setTimeout(processChunk, 0); // Next chunk
+        } else {
+            // Done
+            finishAnalysis(matchedCount, emptySSCount);
         }
+    }
 
-        // Check Communes
-        for (const feature of state.layers.communes.features) {
-            if (turf.booleanPointInPolygon(pt, feature)) {
-                commune = feature.properties.Nom_Commun || feature.properties.Nom_commun || feature.properties.NAME;
-                break;
-            }
-        }
+    // Start
+    setTimeout(processChunk, 0);
+}
 
-        // --- Emergency Lookup ---
-        // Normalize helper
-        const norm = (str) => String(str || '').trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-
-        let emergencyInfo = {
-            '141': '', '5757': '', '15': '', '19': '', '112': '', '177': ''
-        };
-
-        if (commune !== 'N/A') {
-            const match = state.emergencyData.find(row => {
-                // Try to match CommuneSS. 
-                // Sometimes Province/Region might not match exactly due to spelling, but Commune is usually granular enough.
-                // We'll check all 3 for best accuracy, but prioritized.
-
-                const rowCommune = row['Commune SS'] || row['Commune'] || row['COMMUNE'];
-                const rowProvince = row['Province'] || row['PROVINCE'];
-
-                // Loose match on commune name
-                return norm(rowCommune) === norm(commune);
-            });
-
-            if (match) {
-                if (match['141']) emergencyInfo['141'] = match['141'];
-                if (match['5757']) emergencyInfo['5757'] = match['5757'];
-                if (match['15']) emergencyInfo['15'] = match['15'];
-                if (match['19']) emergencyInfo['19'] = match['19'];
-                if (match['112']) emergencyInfo['112'] = match['112'];
-                if (match['177']) emergencyInfo['177'] = match['177'];
-            }
-        }
-
-        const result = {
-            ...point,
-            region,
-            province,
-            commune,
-            ...emergencyInfo
-        };
-
-        state.processedPoints.push(result);
-
-        // Add to map
-        L.circleMarker([point.lat, point.lng], {
-            radius: 6,
-            fillColor: '#ef4444', // Red dots
-            color: '#fff',
-            weight: 1,
-            opacity: 1,
-            fillOpacity: 0.8
-        }).bindPopup(`
-          <b>${point.id}</b><br>
-          Commune: ${commune}<br>
-          Province: ${province}<br>
-          Region: ${region}
-        `).addTo(state.mapLayerGroups.points);
-
-        if (commune !== 'N/A' || province !== 'N/A') matchedCount++;
-    });
-
+function finishAnalysis(matchedCount, emptySSCount) {
     renderTable();
-    updateStats(state.points.length, matchedCount);
     updateStatus(false);
+    filtersCard.style.display = 'block';
 
-    // Zoom to points
     if (state.points.length > 0) {
         const bounds = L.latLngBounds(state.points.map(p => [p.lat, p.lng]));
         map.fitBounds(bounds, { padding: [50, 50] });
     }
-
     exportBtn.disabled = false;
 }
 
@@ -304,17 +363,44 @@ function updateStatus(show, text = '') {
     statusText.textContent = text;
 }
 
-function updateStats(total, matched) {
+function updateStats(total, matched, emptySS) {
     statsCard.style.display = 'block';
     totalPointsEl.textContent = total;
     matchedPointsEl.textContent = matched;
+    emptySSPointsEl.textContent = emptySS;
 }
 
 function renderTable() {
     resultsTableBody.innerHTML = '';
+    state.mapLayerGroups.points.clearLayers(); // Re-render markers based on filter
 
-    // Show first 100 for performance
-    const displayPoints = state.processedPoints.slice(0, 500);
+    const showOnlyEmptySS = filterEmptySS.checked;
+
+    const filteredPoints = state.processedPoints.filter(p => {
+        if (showOnlyEmptySS) return p._isEmptySS;
+        return true;
+    });
+
+    // Re-add markers
+    filteredPoints.forEach(p => {
+        L.circleMarker([p.lat, p.lng], {
+            radius: 6,
+            fillColor: p._isEmptySS ? '#f97316' : '#ef4444', // Orange for missing SS, Red for others
+            color: '#fff',
+            weight: 1,
+            opacity: 1,
+            fillOpacity: 0.8
+        }).bindPopup(`
+          <b>${p.id}</b><br>
+          Commune: ${p.commune}<br>
+          Province: ${p.province}<br>
+          Region: ${p.region}<br>
+          ${p._isEmptySS ? '<b style="color:orange">Missing SS Data</b>' : ''}
+        `).addTo(state.mapLayerGroups.points);
+    });
+
+    // Show first 500 of filtered list
+    const displayPoints = filteredPoints.slice(0, 500);
 
     displayPoints.forEach(p => {
         const row = document.createElement('tr');
@@ -335,6 +421,10 @@ function renderTable() {
         resultsTableBody.appendChild(row);
     });
 }
+
+filterEmptySS.addEventListener('change', () => {
+    renderTable();
+});
 
 // --- Toggles ---
 toggleRegions.addEventListener('change', (e) => {
@@ -371,6 +461,55 @@ exportBtn.addEventListener('click', () => {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Results");
     XLSX.writeFile(wb, "geo_analysis_results.xlsx");
+});
+
+exportHierarchyBtn.addEventListener('click', () => {
+    if (!state.layers.regions || !state.layers.provinces || !state.layers.communes) {
+        alert("Map data not loaded yet.");
+        return;
+    }
+
+    const rows = [];
+    const regions = state.layers.regions.features;
+    const provinces = state.layers.provinces.features;
+    const communes = state.layers.communes.features;
+
+    regions.forEach(regionFeat => {
+        const rProps = regionFeat.properties;
+        const rName = rProps.Nom_Region || rProps.Nom_region || rProps.NAME;
+        const rCode = rProps.Code_Regio;
+
+        // Find Provinces
+        const regionProvinces = provinces.filter(p => p.properties.Code_Regio === rCode);
+
+        if (regionProvinces.length === 0) {
+            rows.push({ Region: rName, Province: '', Commune: '' });
+        } else {
+            regionProvinces.forEach(provFeat => {
+                const pProps = provFeat.properties;
+                const pName = pProps.Nom_Provin || pProps.Nom_provin || pProps.NAME;
+                const pCode = pProps.Code_Provi;
+
+                // Find Communes
+                const provCommunes = communes.filter(c => c.properties.Code_Provi === pCode);
+
+                if (provCommunes.length === 0) {
+                    rows.push({ Region: rName, Province: pName, Commune: '' });
+                } else {
+                    provCommunes.forEach(commFeat => {
+                        const cProps = commFeat.properties;
+                        const cName = cProps.Nom_Commun || cProps.Nom_commun || cProps.NAME;
+                        rows.push({ Region: rName, Province: pName, Commune: cName });
+                    });
+                }
+            });
+        }
+    });
+
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Hierarchy");
+    XLSX.writeFile(wb, "regions_provinces_communes.xlsx");
 });
 
 // Start
