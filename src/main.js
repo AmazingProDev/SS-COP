@@ -2,6 +2,8 @@ import './style.css';
 import * as L from 'leaflet';
 import * as turf from '@turf/turf';
 import * as XLSX from 'xlsx';
+import 'leaflet-control-geocoder/dist/Control.Geocoder.css';
+import 'leaflet-control-geocoder';
 
 // --- State ---
 const state = {
@@ -25,11 +27,26 @@ const state = {
 // --- Initialization ---
 const map = L.map('map').setView([31.7917, -7.0926], 6); // Centered on Morocco
 
-L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
-    subdomains: 'abcd',
-    maxZoom: 20
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    maxZoom: 19
 }).addTo(map);
+
+// Add Geocoder
+L.Control.geocoder({
+    defaultMarkGeocode: false
+})
+    .on('markgeocode', function (e) {
+        const bbox = e.geocode.bbox;
+        const poly = L.polygon([
+            bbox.getSouthEast(),
+            bbox.getNorthEast(),
+            bbox.getNorthWest(),
+            bbox.getSouthWest()
+        ]).addTo(map);
+        map.fitBounds(poly.getBounds());
+    })
+    .addTo(map);
 
 // Add layer groups to map
 state.mapLayerGroups.regions.addTo(map);
@@ -55,6 +72,16 @@ const filterEmptySS = document.getElementById('filterEmptySS');
 const statsCard = document.getElementById('statsCard');
 const exportBtn = document.getElementById('exportBtn');
 const exportHierarchyBtn = document.getElementById('exportHierarchyBtn');
+const siteSearchInput = document.getElementById('siteSearchInput');
+const siteSearchBtn = document.getElementById('siteSearchBtn');
+const toggleSidebarBtn = document.getElementById('toggleSidebarBtn');
+const sidebar = document.querySelector('.sidebar');
+const manualSiteName = document.getElementById('manualSiteName');
+const manualLat = document.getElementById('manualLat');
+const manualLng = document.getElementById('manualLng');
+const addSiteBtn = document.getElementById('addSiteBtn');
+const toggleManualAdd = document.getElementById('toggleManualAdd');
+const manualAddCard = document.querySelector('.manual-add-collapsed');
 
 // --- Load Data ---
 async function loadGeoData() {
@@ -102,9 +129,50 @@ async function loadGeoData() {
         calcBBoxes(state.layers.provinces);
         calcBBoxes(state.layers.communes);
 
-        renderGeoJson(state.layers.regions, state.mapLayerGroups.regions, {
-            color: '#3b82f6', weight: 2, fillOpacity: 0.1
+
+        // --- Region Coloring ---
+        // distinct colors for 12 regions
+        const distinctColors = [
+            '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEEAD', '#D4A5A5',
+            '#9B59B6', '#3498DB', '#E67E22', '#2ECC71', '#F1C40F', '#E74C3C'
+        ];
+
+        // Create mapping: RegionName -> Color
+        const regionColorMap = new Map();
+
+        state.layers.regions.features.forEach((feature, index) => {
+            const props = feature.properties;
+            const name = props.Nom_Region || props.Nom_region || props.NAME || 'Region ' + (index + 1);
+            if (!regionColorMap.has(name)) {
+                regionColorMap.set(name, distinctColors[regionColorMap.size % distinctColors.length]);
+            }
         });
+
+        // Add Legend
+        const legend = L.control({ position: 'bottomright' });
+        legend.onAdd = function (map) {
+            const div = L.DomUtil.create('div', 'info legend');
+            div.innerHTML = '<h4>Regions</h4>';
+            regionColorMap.forEach((color, name) => {
+                div.innerHTML +=
+                    '<i style="background:' + color + '"></i> ' +
+                    name + '<br>';
+            });
+            return div;
+        };
+        legend.addTo(map);
+
+        renderGeoJson(state.layers.regions, state.mapLayerGroups.regions, (feature) => {
+            const props = feature.properties;
+            const name = props.Nom_Region || props.Nom_region || props.NAME || 'Unknown';
+            return {
+                color: regionColorMap.get(name) || '#3b82f6',
+                weight: 2,
+                fillOpacity: 0.4,
+                fillColor: regionColorMap.get(name) || '#3b82f6'
+            };
+        });
+
         renderGeoJson(state.layers.provinces, state.mapLayerGroups.provinces, {
             color: '#10b981', weight: 1, fillOpacity: 0.05
         });
@@ -206,6 +274,48 @@ async function processExcel(file) {
         }
     };
     reader.readAsArrayBuffer(file);
+}
+
+// --- Helpers ---
+function createRow(p) {
+    const row = document.createElement('tr');
+    row.id = `row-${p.id}`;
+    row.innerHTML = `
+        <td>${p.id}</td>
+        <td>${p.lat.toFixed(5)}</td>
+        <td>${p.lng.toFixed(5)}</td>
+        <td class="${p.commune !== 'N/A' ? '' : 'text-muted'}">${p.commune}</td>
+        <td class="${p.province !== 'N/A' ? '' : 'text-muted'}">${p.province}</td>
+        <td class="${p.region !== 'N/A' ? '' : 'text-muted'}">${p.region}</td>
+        <td>${p['141'] || '-'}</td>
+        <td>${p['5757'] || '-'}</td>
+        <td>${p['15'] || '-'}</td>
+        <td>${p['19'] || '-'}</td>
+        <td>${p['112'] || '-'}</td>
+        <td>${p['177'] || '-'}</td>
+    `;
+    return row;
+}
+
+function highlightTableRow(id) {
+    let row = document.getElementById(`row-${id}`);
+
+    // If row not found (e.g. outside of 500 limit), try to find point and add it
+    if (!row) {
+        const point = state.processedPoints.find(p => p.id == id); // Loose equality for string/number match
+        if (point) {
+            row = createRow(point);
+            resultsTableBody.appendChild(row);
+        }
+    }
+
+    if (row) {
+        row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        row.classList.add('highlight-row');
+        setTimeout(() => row.classList.remove('highlight-row'), 3000);
+    } else {
+        console.log("Row not found for id:", id);
+    }
 }
 
 // --- Analysis Logic ---
@@ -318,7 +428,14 @@ function analyzePoints() {
               Province: ${province}<br>
               Region: ${region}<br>
               SS Data Found: ${foundKeys || 'None'}
+              SS Data Found: ${foundKeys || 'None'}
             `);
+
+            // Add click listener
+            marker.on('click', () => {
+                highlightTableRow(point.id);
+            });
+
             layerBuffer.push(marker);
         }
 
@@ -364,7 +481,7 @@ function updateStatus(show, text = '') {
 }
 
 function updateStats(total, matched, emptySS) {
-    statsCard.style.display = 'block';
+    // statsCard.style.display = 'block';
     totalPointsEl.textContent = total;
     matchedPointsEl.textContent = matched;
     emptySSPointsEl.textContent = emptySS;
@@ -396,28 +513,17 @@ function renderTable() {
           Province: ${p.province}<br>
           Region: ${p.region}<br>
           ${p._isEmptySS ? '<b style="color:orange">Missing SS Data</b>' : ''}
-        `).addTo(state.mapLayerGroups.points);
+          ${p._isEmptySS ? '<b style="color:orange">Missing SS Data</b>' : ''}
+        `).addTo(state.mapLayerGroups.points).on('click', () => {
+            highlightTableRow(p.id);
+        });
     });
 
     // Show first 500 of filtered list
     const displayPoints = filteredPoints.slice(0, 500);
 
     displayPoints.forEach(p => {
-        const row = document.createElement('tr');
-        row.innerHTML = `
-            <td>${p.id}</td>
-            <td>${p.lat.toFixed(5)}</td>
-            <td>${p.lng.toFixed(5)}</td>
-            <td class="${p.commune !== 'N/A' ? '' : 'text-muted'}">${p.commune}</td>
-            <td class="${p.province !== 'N/A' ? '' : 'text-muted'}">${p.province}</td>
-            <td class="${p.region !== 'N/A' ? '' : 'text-muted'}">${p.region}</td>
-            <td>${p['141'] || '-'}</td>
-            <td>${p['5757'] || '-'}</td>
-            <td>${p['15'] || '-'}</td>
-            <td>${p['19'] || '-'}</td>
-            <td>${p['112'] || '-'}</td>
-            <td>${p['177'] || '-'}</td>
-        `;
+        const row = createRow(p);
         resultsTableBody.appendChild(row);
     });
 }
@@ -512,5 +618,101 @@ exportHierarchyBtn.addEventListener('click', () => {
     XLSX.writeFile(wb, "regions_provinces_communes.xlsx");
 });
 
+// --- Site Search ---
+siteSearchBtn.addEventListener('click', () => {
+    const query = siteSearchInput.value.trim().toLowerCase();
+    if (!query) return;
+
+    // Search in processedPoints
+    const foundPoint = state.processedPoints.find(p =>
+        String(p.id).toLowerCase() === query
+    );
+
+    if (foundPoint) {
+        // Zoom Map
+        map.flyTo([foundPoint.lat, foundPoint.lng], 15);
+
+        // Open Popup
+        // We need to find the marker. Since markers are in a LayerGroup, 
+        // we can iterate or keep a ref? Iterating is fine for now < 10k points.
+        // Actually, just creating a temp popup is easier if we don't have direct ref.
+        L.popup()
+            .setLatLng([foundPoint.lat, foundPoint.lng])
+            .setContent(`<b>${foundPoint.id}</b><br>Found via Search`)
+            .openOn(map);
+
+        // Highlight Table Row
+        highlightTableRow(foundPoint.id);
+    } else {
+        alert("Site not found!");
+    }
+});
+
+// --- Sidebar Toggle ---
+toggleSidebarBtn.addEventListener('click', () => {
+    sidebar.classList.toggle('collapsed');
+
+    // Resize map after transition
+    setTimeout(() => {
+        map.invalidateSize();
+    }, 300);
+});
+
+// --- Manual Add ---
+addSiteBtn.addEventListener('click', () => {
+    const name = manualSiteName.value.trim();
+    const lat = parseFloat(manualLat.value);
+    const lng = parseFloat(manualLng.value);
+
+    if (!name || isNaN(lat) || isNaN(lng)) {
+        alert("Please enter valid Name, Latitude, and Longitude.");
+        return;
+    }
+
+    const newPoint = {
+        id: name,
+        lat: lat,
+        lng: lng,
+        original: { 'Site Name': name, 'Latitude': lat, 'Longitude': lng } // Mock original data
+    };
+
+    state.points.push(newPoint);
+    updateStatus(true, "Processing new site...");
+
+    // Clear inputs
+    manualSiteName.value = '';
+    manualLat.value = '';
+    manualLng.value = '';
+
+    // Re-run analysis to categorize the new point
+    // Optimization: Could just process this one point, but analyzePoints handles everything.
+    // Given < 10k points, full re-run is acceptable for safety and simplicity.
+    setTimeout(() => {
+        analyzePoints();
+
+        // After analysis, zoom to it
+        setTimeout(() => {
+            // Find it in processed to get correct ref? 
+            // Logic in analyzePoints clears processedPoints.
+            // We can just use the highlight logic since we know the ID.
+            const found = state.processedPoints.find(p => p.id === name);
+            if (found) {
+                map.flyTo([found.lat, found.lng], 15);
+                L.popup()
+                    .setLatLng([found.lat, found.lng])
+                    .setContent(`<b>${found.id}</b><br>Added Manually`)
+                    .openOn(map);
+                highlightTableRow(found.id);
+            }
+        }, 500); // Wait for analyzePoints async chunks
+    }, 100);
+});
+
+// --- Toggle Manual Add Form ---
+if (toggleManualAdd) {
+    toggleManualAdd.addEventListener('click', () => {
+        manualAddCard.classList.toggle('expanded');
+    });
+}
 // Start
 loadGeoData();

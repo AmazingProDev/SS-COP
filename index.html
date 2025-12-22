@@ -17,7 +17,15 @@
   <div id="app">
     <nav class="navbar">
       <div class="brand">
-        <div class="logo-icon">🌍</div>
+        <button id="toggleSidebarBtn" class="btn icon-only" title="Toggle Sidebar">
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="3" y1="12" x2="21" y2="12"></line>
+            <line x1="3" y1="6" x2="21" y2="6"></line>
+            <line x1="3" y1="18" x2="21" y2="18"></line>
+          </svg>
+        </button>
+        <img src="/logo.jpg" alt="Logo" class="logo-img" />
         <h1>SS-COP <span class="highlight">Analyzer</span></h1>
       </div>
       <div class="controls">
@@ -34,7 +42,7 @@
 
           <div class="drop-zone" id="dropZone">
             <div class="icon">📂</div>
-            <p>Drag & Drop your Excel file here</p>
+            <p>Drag & Drop your file here</p>
             <p class="small">or click to browse</p>
             <input type="file" id="fileInput" accept=".xlsx, .xls" hidden />
           </div>
@@ -44,6 +52,10 @@
             <span id="statusText">Processing...</span>
           </div>
         </div>
+
+
+
+
 
         <div class="card layers-card">
           <h2>Active Layers</h2>
@@ -88,6 +100,30 @@
 
       <section class="content">
         <div class="map-container">
+          <div class="map-controls-overlay">
+            <div class="card control-card">
+              <h3>Search Site</h3>
+              <div class="search-box">
+                <input type="text" id="siteSearchInput" placeholder="Enter Site Name or ID" />
+                <button id="siteSearchBtn" class="btn primary icon-btn">🔍</button>
+              </div>
+            </div>
+
+            <div class="card control-card manual-add-collapsed">
+              <div class="card-header" id="toggleManualAdd">
+                <h3>Add Site Manually</h3>
+                <span class="toggle-icon">▼</span>
+              </div>
+              <div class="manual-form">
+                <input type="text" id="manualSiteName" placeholder="Site Name" />
+                <div class="coord-inputs">
+                  <input type="number" id="manualLat" placeholder="Latitude" step="any" />
+                  <input type="number" id="manualLng" placeholder="Longitude" step="any" />
+                </div>
+                <button id="addSiteBtn" class="btn primary">Add Site</button>
+              </div>
+            </div>
+          </div>
           <div id="map"></div>
         </div>
 
