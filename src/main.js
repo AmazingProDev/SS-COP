@@ -53,7 +53,8 @@ L.Control.geocoder({
     .addTo(map);
 
 // Add layer groups to map
-state.mapLayerGroups.regions.addTo(map);
+// state.mapLayerGroups.regions.addTo(map);
+state.mapLayerGroups.drs.addTo(map);
 // Provinces and Communes hidden by default to avoid clutter
 // state.mapLayerGroups.provinces.addTo(map);
 // state.mapLayerGroups.communes.addTo(map);
@@ -326,6 +327,7 @@ async function loadGeoData() {
         });
 
         updateStatus(false);
+        updateLegend();
     } catch (err) {
         console.error(err);
         updateStatus(false);
