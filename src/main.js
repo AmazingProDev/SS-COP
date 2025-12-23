@@ -10,12 +10,16 @@ const state = {
     layers: {
         regions: null,
         provinces: null,
-        communes: null
+        communes: null,
+        drs: null // aggregated GeoJSON
     },
+    drColors: {}, // Map<drName, color>
+    regionColors: {}, // Map<regionName, color>
     emergencyData: [], // Array of rows from emergency excel
     emergencyDataMap: new Map(), // Map<normalized_commune, row>
     mapLayerGroups: {
         regions: L.layerGroup(),
+        drs: L.layerGroup(),
         provinces: L.layerGroup(),
         communes: L.layerGroup(),
         points: L.layerGroup()
@@ -61,15 +65,17 @@ const fileInput = document.getElementById('fileInput');
 const statusBox = document.getElementById('statusBox');
 const statusText = document.getElementById('statusText');
 const toggleRegions = document.getElementById('toggleRegions');
+const toggleDRs = document.getElementById('toggleDRs');
 const toggleProvinces = document.getElementById('toggleProvinces');
 const toggleCommunes = document.getElementById('toggleCommunes');
 const resultsTableBody = document.querySelector('#resultsTable tbody');
 const totalPointsEl = document.getElementById('totalPoints');
+const drLegend = document.getElementById('drLegend');
 const matchedPointsEl = document.getElementById('matchedPoints');
 const emptySSPointsEl = document.getElementById('emptySSPoints');
 const filtersCard = document.getElementById('filtersCard');
 const filterEmptySS = document.getElementById('filterEmptySS');
-const statsCard = document.getElementById('statsCard');
+// const statsCard = document.getElementById('statsCard');
 const exportBtn = document.getElementById('exportBtn');
 const exportHierarchyBtn = document.getElementById('exportHierarchyBtn');
 const siteSearchInput = document.getElementById('siteSearchInput');
@@ -88,11 +94,12 @@ async function loadGeoData() {
     updateStatus(true, 'Loading map data...');
     try {
         const timestamp = new Date().getTime();
-        const [regionsRes, provincesRes, communesRes, emergencyRes] = await Promise.all([
+        const [regionsRes, provincesRes, communesRes, emergencyRes, drMappingRes] = await Promise.all([
             fetch(`/data/regions.json?v=${timestamp}`),
             fetch(`/data/provinces.json?v=${timestamp}`),
             fetch(`/data/communes.json?v=${timestamp}`),
-            fetch(`/data/emergency_numbers.xlsx?v=${timestamp}`)
+            fetch(`/data/emergency_numbers.xlsx?v=${timestamp}`),
+            fetch(`/data/province_to_dr.xlsx?v=${timestamp}`)
         ]);
 
         state.layers.regions = await regionsRes.json();
@@ -111,7 +118,7 @@ async function loadGeoData() {
 
         state.emergencyData.forEach(row => {
             const rowCommune = row['Commune SS'] || row['Commune'] || row['COMMUNE'];
-            const rowProvince = row['Province'] || row['PROVINCE'];
+            // const rowProvince = row['Province'] || row['PROVINCE'];
             if (rowCommune) {
                 state.emergencyDataMap.set(norm(rowCommune), row);
             }
@@ -138,29 +145,23 @@ async function loadGeoData() {
         ];
 
         // Create mapping: RegionName -> Color
+        // stored in state for legend usage
         const regionColorMap = new Map();
 
         state.layers.regions.features.forEach((feature, index) => {
             const props = feature.properties;
             const name = props.Nom_Region || props.Nom_region || props.NAME || 'Region ' + (index + 1);
             if (!regionColorMap.has(name)) {
-                regionColorMap.set(name, distinctColors[regionColorMap.size % distinctColors.length]);
+                const color = distinctColors[regionColorMap.size % distinctColors.length];
+                regionColorMap.set(name, color);
+                state.regionColors[name] = color;
             }
         });
 
-        // Add Legend
-        const legend = L.control({ position: 'bottomright' });
-        legend.onAdd = function (map) {
-            const div = L.DomUtil.create('div', 'info legend');
-            div.innerHTML = '<h4>Regions</h4>';
-            regionColorMap.forEach((color, name) => {
-                div.innerHTML +=
-                    '<i style="background:' + color + '"></i> ' +
-                    name + '<br>';
-            });
-            return div;
-        };
-        legend.addTo(map);
+        // Remove old Leaflet Legend if present
+        // (No persistent ref kept, but we are using custom #drLegend now)
+
+
 
         renderGeoJson(state.layers.regions, state.mapLayerGroups.regions, (feature) => {
             const props = feature.properties;
@@ -172,6 +173,150 @@ async function loadGeoData() {
                 fillColor: regionColorMap.get(name) || '#3b82f6'
             };
         });
+
+        // --- DR Aggregation Logic ---
+        try {
+            const drAb = await drMappingRes.arrayBuffer();
+            const drWb = XLSX.read(drAb, { type: 'array' });
+            const drSheet = drWb.Sheets[drWb.SheetNames[0]];
+            const drRows = XLSX.utils.sheet_to_json(drSheet);
+
+            const drMap = new Map();
+            drRows.forEach(row => {
+                const drName = row['DR'];
+                const provinceName = row['Province'];
+                if (drName && provinceName) {
+                    if (!drMap.has(drName)) drMap.set(drName, []);
+                    drMap.get(drName).push(provinceName);
+                }
+            });
+
+            // Exception Logic: Move 'El Mansouria' and 'Bouznika' from Benslimane (DRS) to DRR
+            const normalize = (str) => String(str).trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+            const exceptions = {
+                sourceProvince: 'benslimane',
+                targetDR: 'DRR',
+                communes: ['el mansouria', 'bouznika', 'charrate']
+            };
+
+            const drFeatures = [];
+            const allDRs = new Set(drMap.keys());
+            allDRs.add(exceptions.targetDR);
+
+            allDRs.forEach(drName => {
+                const provNames = drMap.get(drName) || [];
+                let featuresToUnion = [];
+
+                provNames.forEach(provName => {
+                    const normProvName = normalize(provName);
+
+                    if (normProvName === normalize(exceptions.sourceProvince)) {
+                        // Benslimane: Add everything EXCEPT exceptions
+                        // Find Province Code for Benslimane to filter communes correctly
+                        const provinceFeat = state.layers.provinces.features.find(f => {
+                            const props = f.properties;
+                            const pName = props.Nom_Provin || props.Nom_provin || props.NAME;
+                            return normalize(pName) === normProvName;
+                        });
+
+                        if (provinceFeat) {
+                            const pCode = provinceFeat.properties.Code_Provi;
+                            const communes = state.layers.communes.features.filter(c => c.properties.Code_Provi === pCode);
+
+                            communes.forEach(c => {
+                                const props = c.properties;
+                                const cName = props.Nom_Commun || props.Nom_commun || props.NAME;
+                                if (!exceptions.communes.includes(normalize(cName))) {
+                                    featuresToUnion.push(c);
+                                }
+                            });
+                        }
+                    } else {
+                        // Normal Province
+                        const features = state.layers.provinces.features.filter(f => {
+                            const props = f.properties;
+                            const pName = props.Nom_Provin || props.Nom_provin || props.NAME;
+                            return normalize(provName) === normalize(pName);
+                        });
+                        features.forEach(f => featuresToUnion.push(f));
+                    }
+                });
+
+                // Add exceptions to Target DR
+                if (drName === exceptions.targetDR) {
+                    const provinceFeat = state.layers.provinces.features.find(f => {
+                        const props = f.properties;
+                        const pName = props.Nom_Provin || props.Nom_provin || props.NAME;
+                        return normalize(pName) === normalize(exceptions.sourceProvince);
+                    });
+
+                    if (provinceFeat) {
+                        const pCode = provinceFeat.properties.Code_Provi;
+                        const communes = state.layers.communes.features.filter(c => c.properties.Code_Provi === pCode);
+
+                        communes.forEach(c => {
+                            const props = c.properties;
+                            const cName = props.Nom_Commun || props.Nom_commun || props.NAME;
+                            if (exceptions.communes.includes(normalize(cName))) {
+                                featuresToUnion.push(c);
+                            }
+                        });
+                    }
+                }
+
+                if (featuresToUnion.length > 0) {
+                    let unioned = featuresToUnion[0];
+                    for (let i = 1; i < featuresToUnion.length; i++) {
+                        try {
+                            unioned = turf.union(unioned, featuresToUnion[i]);
+                        } catch (e) {
+                            console.warn("Union failed for", drName, e);
+                        }
+                    }
+
+                    if (unioned) {
+                        unioned.properties = { NAME: drName, Type: 'DR' };
+                        drFeatures.push(unioned);
+                    }
+                }
+            });
+
+            state.layers.drs = { type: "FeatureCollection", features: drFeatures };
+
+            // Assign Colors to DRs
+            const palette = [
+                '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEEAD', '#D4A5A5',
+                '#9B59B6', '#3498DB', '#E67E22', '#2ECC71', '#F1C40F', '#E74C3C'
+            ];
+            drFeatures.forEach((f, i) => {
+                const name = f.properties.NAME;
+                state.drColors[name] = palette[i % palette.length];
+            });
+
+            renderGeoJson(state.layers.drs, state.mapLayerGroups.drs, {
+                color: '#8b5cf6', weight: 2, fillOpacity: 0.4, dashArray: '5, 5' // Default fallback
+            });
+
+            // Update DR Layer Style function to use assigned colors
+            state.mapLayerGroups.drs.clearLayers();
+            L.geoJSON(state.layers.drs, {
+                style: (feature) => ({
+                    color: state.drColors[feature.properties.NAME] || '#8b5cf6',
+                    weight: 2,
+                    fillOpacity: 0.4,
+                    dashArray: '5, 5'
+                }),
+                onEachFeature: (feature, layer) => {
+                    layer.bindPopup(`<b>${feature.properties.NAME}</b>`);
+                }
+            }).addTo(state.mapLayerGroups.drs);
+
+
+            console.log(`Generated ${drFeatures.length} DR regions (with exceptions).`);
+
+        } catch (e) {
+            console.error("Error processing DR mapping:", e);
+        }
 
         renderGeoJson(state.layers.provinces, state.mapLayerGroups.provinces, {
             color: '#10b981', weight: 1, fillOpacity: 0.05
@@ -487,6 +632,50 @@ function updateStats(total, matched, emptySS) {
     emptySSPointsEl.textContent = emptySS;
 }
 
+function updateLegend() {
+    drLegend.innerHTML = '';
+    let hasContent = false;
+
+    if (toggleRegions.checked) {
+        hasContent = true;
+        const section = document.createElement('div');
+        section.innerHTML = '<h4>Regions</h4>';
+        drLegend.appendChild(section);
+
+        Object.keys(state.regionColors).forEach(name => {
+            const color = state.regionColors[name];
+            const item = document.createElement('div');
+            item.className = 'legend-item';
+            item.innerHTML = `<div class="legend-color" style="background: ${color}"></div><span>${name}</span>`;
+            drLegend.appendChild(item);
+        });
+    }
+
+    if (toggleDRs.checked) {
+        if (hasContent) {
+            const separator = document.createElement('hr');
+            separator.style.margin = '10px 0';
+            separator.style.border = '0';
+            separator.style.borderTop = '1px solid rgba(255,255,255,0.1)';
+            drLegend.appendChild(separator);
+        }
+        hasContent = true;
+        const section = document.createElement('div');
+        section.innerHTML = '<h4>Directions Régionales</h4>';
+        drLegend.appendChild(section);
+
+        Object.keys(state.drColors).forEach(name => {
+            const color = state.drColors[name];
+            const item = document.createElement('div');
+            item.className = 'legend-item';
+            item.innerHTML = `<div class="legend-color" style="background: ${color}"></div><span>${name}</span>`;
+            drLegend.appendChild(item);
+        });
+    }
+
+    drLegend.style.display = hasContent ? 'block' : 'none';
+}
+
 function renderTable() {
     resultsTableBody.innerHTML = '';
     state.mapLayerGroups.points.clearLayers(); // Re-render markers based on filter
@@ -536,11 +725,21 @@ filterEmptySS.addEventListener('change', () => {
 toggleRegions.addEventListener('change', (e) => {
     if (e.target.checked) state.mapLayerGroups.regions.addTo(map);
     else state.mapLayerGroups.regions.remove();
+    updateLegend();
 });
 
 toggleProvinces.addEventListener('change', (e) => {
     if (e.target.checked) state.mapLayerGroups.provinces.addTo(map);
     else state.mapLayerGroups.provinces.remove();
+});
+
+toggleDRs.addEventListener('change', (e) => {
+    if (e.target.checked) {
+        state.mapLayerGroups.drs.addTo(map);
+    } else {
+        state.mapLayerGroups.drs.remove();
+    }
+    updateLegend();
 });
 
 toggleCommunes.addEventListener('change', (e) => {
