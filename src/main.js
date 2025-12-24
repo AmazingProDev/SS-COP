@@ -4,6 +4,7 @@ import * as turf from '@turf/turf';
 import * as XLSX from 'xlsx';
 import 'leaflet-control-geocoder/dist/Control.Geocoder.css';
 import 'leaflet-control-geocoder';
+import { initCoverageService, getCoverage } from './coverageService';
 
 // --- State ---
 const state = {
@@ -14,6 +15,7 @@ const state = {
         drs: null // aggregated GeoJSON
     },
     drColors: {}, // Map<drName, color>
+    drToProvinces: {}, // Map<drName, [provinceNames]>
     regionColors: {}, // Map<regionName, color>
     emergencyData: [], // Array of rows from emergency excel
     emergencyDataMap: new Map(), // Map<normalized_commune, row>
@@ -53,11 +55,11 @@ L.Control.geocoder({
     .addTo(map);
 
 // Add layer groups to map
-// state.mapLayerGroups.regions.addTo(map);
+state.mapLayerGroups.regions.addTo(map);
 state.mapLayerGroups.drs.addTo(map);
-// Provinces and Communes hidden by default to avoid clutter
-// state.mapLayerGroups.provinces.addTo(map);
-// state.mapLayerGroups.communes.addTo(map);
+// Provinces and Communes hidden by default to avoid clutter, but groups must be strictly added if we want them togglable
+state.mapLayerGroups.provinces.addTo(map);
+state.mapLayerGroups.communes.addTo(map);
 state.mapLayerGroups.points.addTo(map);
 
 // --- DOM Elements ---
@@ -87,20 +89,21 @@ const manualSiteName = document.getElementById('manualSiteName');
 const manualLat = document.getElementById('manualLat');
 const manualLng = document.getElementById('manualLng');
 const addSiteBtn = document.getElementById('addSiteBtn');
-const toggleManualAdd = document.getElementById('toggleManualAdd');
-const manualAddCard = document.querySelector('.manual-add-collapsed');
+
 
 // --- Load Data ---
 async function loadGeoData() {
     updateStatus(true, 'Loading map data...');
     try {
         const timestamp = new Date().getTime();
-        const [regionsRes, provincesRes, communesRes, emergencyRes, drMappingRes] = await Promise.all([
+        const [regionsRes, provincesRes, communesRes, emergencyRes, drMappingRes, drsRes] = await Promise.all([
             fetch(`/data/regions.json?v=${timestamp}`),
             fetch(`/data/provinces.json?v=${timestamp}`),
             fetch(`/data/communes.json?v=${timestamp}`),
             fetch(`/data/emergency_numbers.xlsx?v=${timestamp}`),
-            fetch(`/data/province_to_dr.xlsx?v=${timestamp}`)
+            fetch(`/data/province_to_dr.xlsx?v=${timestamp}`),
+            fetch(`/data/drs.json?v=${timestamp}`),
+            initCoverageService()
         ]);
 
         state.layers.regions = await regionsRes.json();
@@ -164,19 +167,14 @@ async function loadGeoData() {
 
 
 
-        renderGeoJson(state.layers.regions, state.mapLayerGroups.regions, (feature) => {
-            const props = feature.properties;
-            const name = props.Nom_Region || props.Nom_region || props.NAME || 'Unknown';
-            return {
-                color: regionColorMap.get(name) || '#3b82f6',
-                weight: 2,
-                fillOpacity: 0.4,
-                fillColor: regionColorMap.get(name) || '#3b82f6'
-            };
-        });
 
-        // --- DR Aggregation Logic ---
+
+        // --- DR Aggregation Logic (Optimized) ---
         try {
+            // Load pre-generated DRs
+            state.layers.drs = await drsRes.json();
+
+            // Load Mapping for Filtering
             const drAb = await drMappingRes.arrayBuffer();
             const drWb = XLSX.read(drAb, { type: 'array' });
             const drSheet = drWb.Sheets[drWb.SheetNames[0]];
@@ -192,110 +190,26 @@ async function loadGeoData() {
                 }
             });
 
-            // Exception Logic: Move 'El Mansouria' and 'Bouznika' from Benslimane (DRS) to DRR
-            const normalize = (str) => String(str).trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-            const exceptions = {
-                sourceProvince: 'benslimane',
-                targetDR: 'DRR',
-                communes: ['el mansouria', 'bouznika', 'charrate']
-            };
+            // Store in state for UI filtering
+            drMap.forEach((v, k) => state.drToProvinces[k] = v);
 
-            const drFeatures = [];
-            const allDRs = new Set(drMap.keys());
-            allDRs.add(exceptions.targetDR);
-
-            allDRs.forEach(drName => {
-                const provNames = drMap.get(drName) || [];
-                let featuresToUnion = [];
-
-                provNames.forEach(provName => {
-                    const normProvName = normalize(provName);
-
-                    if (normProvName === normalize(exceptions.sourceProvince)) {
-                        // Benslimane: Add everything EXCEPT exceptions
-                        // Find Province Code for Benslimane to filter communes correctly
-                        const provinceFeat = state.layers.provinces.features.find(f => {
-                            const props = f.properties;
-                            const pName = props.Nom_Provin || props.Nom_provin || props.NAME;
-                            return normalize(pName) === normProvName;
-                        });
-
-                        if (provinceFeat) {
-                            const pCode = provinceFeat.properties.Code_Provi;
-                            const communes = state.layers.communes.features.filter(c => c.properties.Code_Provi === pCode);
-
-                            communes.forEach(c => {
-                                const props = c.properties;
-                                const cName = props.Nom_Commun || props.Nom_commun || props.NAME;
-                                if (!exceptions.communes.includes(normalize(cName))) {
-                                    featuresToUnion.push(c);
-                                }
-                            });
-                        }
-                    } else {
-                        // Normal Province
-                        const features = state.layers.provinces.features.filter(f => {
-                            const props = f.properties;
-                            const pName = props.Nom_Provin || props.Nom_provin || props.NAME;
-                            return normalize(provName) === normalize(pName);
-                        });
-                        features.forEach(f => featuresToUnion.push(f));
-                    }
+            // Set all DRs to visible by default
+            if (state.drToProvinces) {
+                Object.keys(state.drToProvinces).forEach(drName => {
+                    hierarchy.visible.drs.add(drName);
                 });
-
-                // Add exceptions to Target DR
-                if (drName === exceptions.targetDR) {
-                    const provinceFeat = state.layers.provinces.features.find(f => {
-                        const props = f.properties;
-                        const pName = props.Nom_Provin || props.Nom_provin || props.NAME;
-                        return normalize(pName) === normalize(exceptions.sourceProvince);
-                    });
-
-                    if (provinceFeat) {
-                        const pCode = provinceFeat.properties.Code_Provi;
-                        const communes = state.layers.communes.features.filter(c => c.properties.Code_Provi === pCode);
-
-                        communes.forEach(c => {
-                            const props = c.properties;
-                            const cName = props.Nom_Commun || props.Nom_commun || props.NAME;
-                            if (exceptions.communes.includes(normalize(cName))) {
-                                featuresToUnion.push(c);
-                            }
-                        });
-                    }
-                }
-
-                if (featuresToUnion.length > 0) {
-                    let unioned = featuresToUnion[0];
-                    for (let i = 1; i < featuresToUnion.length; i++) {
-                        try {
-                            unioned = turf.union(unioned, featuresToUnion[i]);
-                        } catch (e) {
-                            console.warn("Union failed for", drName, e);
-                        }
-                    }
-
-                    if (unioned) {
-                        unioned.properties = { NAME: drName, Type: 'DR' };
-                        drFeatures.push(unioned);
-                    }
-                }
-            });
-
-            state.layers.drs = { type: "FeatureCollection", features: drFeatures };
+                hierarchy.visible.drs.add('DRR'); // Exceptions target
+            }
 
             // Assign Colors to DRs
             const palette = [
                 '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEEAD', '#D4A5A5',
                 '#9B59B6', '#3498DB', '#E67E22', '#2ECC71', '#F1C40F', '#E74C3C'
             ];
-            drFeatures.forEach((f, i) => {
+
+            state.layers.drs.features.forEach((f, i) => {
                 const name = f.properties.NAME;
                 state.drColors[name] = palette[i % palette.length];
-            });
-
-            renderGeoJson(state.layers.drs, state.mapLayerGroups.drs, {
-                color: '#8b5cf6', weight: 2, fillOpacity: 0.4, dashArray: '5, 5' // Default fallback
             });
 
             // Update DR Layer Style function to use assigned colors
@@ -312,22 +226,39 @@ async function loadGeoData() {
                 }
             }).addTo(state.mapLayerGroups.drs);
 
-
-            console.log(`Generated ${drFeatures.length} DR regions (with exceptions).`);
+            console.log(`Loaded ${state.layers.drs.features.length} DR regions.`);
 
         } catch (e) {
             console.error("Error processing DR mapping:", e);
         }
 
-        renderGeoJson(state.layers.provinces, state.mapLayerGroups.provinces, {
-            color: '#10b981', weight: 1, fillOpacity: 0.05
-        });
-        renderGeoJson(state.layers.communes, state.mapLayerGroups.communes, {
-            color: '#ec4899', weight: 0.5, fillOpacity: 0.05
-        });
+
 
         updateStatus(false);
-        updateLegend();
+
+        // Initialize Visibility Sets
+        // Regions: All visible by default
+        state.layers.regions.features.forEach(f => {
+            const name = f.properties.Nom_Region || f.properties.Nom_region || f.properties.NAME;
+            if (name) hierarchy.visible.regions.add(name);
+        });
+
+        // DRs: All visible by default (handled in DR logic, but good to confirm)
+        // Provinces/Communes: Hidden by default (sets empty)
+
+        // Initial Hierarchy Render
+        renderRegions();
+        renderDRs();
+        renderProvinces();
+        renderCommunes();
+
+        // Initial Map Layer Render
+        updateMapVisibility('region');
+        updateMapVisibility('dr');
+        updateMapVisibility('province');
+        updateMapVisibility('commune');
+
+        // updateLegend(); // Handled by toggles? No, remove updateLegend call since toggles are removed or different
     } catch (err) {
         console.error(err);
         updateStatus(false);
@@ -423,6 +354,8 @@ async function processExcel(file) {
     reader.readAsArrayBuffer(file);
 }
 
+
+
 // --- Helpers ---
 function createRow(p) {
     const row = document.createElement('tr');
@@ -434,6 +367,7 @@ function createRow(p) {
         <td class="${p.commune !== 'N/A' ? '' : 'text-muted'}">${p.commune}</td>
         <td class="${p.province !== 'N/A' ? '' : 'text-muted'}">${p.province}</td>
         <td class="${p.region !== 'N/A' ? '' : 'text-muted'}">${p.region}</td>
+        <td class="${p.dr !== 'N/A' ? '' : 'text-muted'}">${p.dr}</td>
         <td>${p['141'] || '-'}</td>
         <td>${p['5757'] || '-'}</td>
         <td>${p['15'] || '-'}</td>
@@ -484,7 +418,7 @@ function analyzePoints() {
 
     const norm = (str) => String(str || '').trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 
-    function processChunk() {
+    async function processChunk() {
         const end = Math.min(currentIndex + CHUNK_SIZE, state.points.length);
 
         for (let i = currentIndex; i < end; i++) {
@@ -494,6 +428,7 @@ function analyzePoints() {
             let commune = 'N/A';
             let province = 'N/A';
             let region = 'N/A';
+            let dr = 'N/A';
 
             // Helper for optimized spatial check
             const findInLayer = (layer) => {
@@ -520,6 +455,7 @@ function analyzePoints() {
             // Order matters? Regions -> Provinces -> Communes
             // Actually independent checks as per original code.
             region = findInLayer(state.layers.regions);
+            dr = findInLayer(state.layers.drs);
             province = findInLayer(state.layers.provinces);
             commune = findInLayer(state.layers.communes);
 
@@ -540,9 +476,12 @@ function analyzePoints() {
                 }
             }
 
+            // --- Coverage Lookup ---
+            // const coverage = await getCoverage(point.lat, point.lng); // optimization: removed
+
             const result = {
                 ...point,
-                region, province, commune, ...emergencyInfo
+                region, dr, province, commune, ...emergencyInfo
             };
 
             state.processedPoints.push(result);
@@ -574,7 +513,7 @@ function analyzePoints() {
               Commune: ${commune}<br>
               Province: ${province}<br>
               Region: ${region}<br>
-              SS Data Found: ${foundKeys || 'None'}
+              DR: ${dr}<br>
               SS Data Found: ${foundKeys || 'None'}
             `);
 
@@ -704,7 +643,6 @@ function renderTable() {
           Province: ${p.province}<br>
           Region: ${p.region}<br>
           ${p._isEmptySS ? '<b style="color:orange">Missing SS Data</b>' : ''}
-          ${p._isEmptySS ? '<b style="color:orange">Missing SS Data</b>' : ''}
         `).addTo(state.mapLayerGroups.points).on('click', () => {
             highlightTableRow(p.id);
         });
@@ -723,30 +661,251 @@ filterEmptySS.addEventListener('change', () => {
     renderTable();
 });
 
-// --- Toggles ---
-toggleRegions.addEventListener('change', (e) => {
-    if (e.target.checked) state.mapLayerGroups.regions.addTo(map);
-    else state.mapLayerGroups.regions.remove();
-    updateLegend();
-});
-
-toggleProvinces.addEventListener('change', (e) => {
-    if (e.target.checked) state.mapLayerGroups.provinces.addTo(map);
-    else state.mapLayerGroups.provinces.remove();
-});
-
-toggleDRs.addEventListener('change', (e) => {
-    if (e.target.checked) {
-        state.mapLayerGroups.drs.addTo(map);
-    } else {
-        state.mapLayerGroups.drs.remove();
+// --- Hierarchy State ---
+const hierarchy = {
+    selectedRegion: null,
+    selectedProvince: null,
+    selectedDR: null,
+    visible: {
+        regions: new Set(), // Set of names
+        provinces: new Set(),
+        communes: new Set(),
+        drs: new Set()
     }
-    updateLegend();
-});
+};
 
-toggleCommunes.addEventListener('change', (e) => {
-    if (e.target.checked) state.mapLayerGroups.communes.addTo(map);
-    else state.mapLayerGroups.communes.remove();
+// --- DOM Elements for Hierarchy ---
+const regionList = document.getElementById('regionList');
+const provinceList = document.getElementById('provinceList');
+const communeList = document.getElementById('communeList');
+const drList = document.getElementById('drList');
+const resetRegionBtn = document.getElementById('resetRegionBtn');
+
+// --- Hierarchy Render Logic ---
+
+function createListItem(name, type, isSelected, isVisible) {
+    const div = document.createElement('div');
+    div.className = `list-item ${isSelected ? 'selected' : ''}`;
+
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = isVisible;
+    checkbox.onclick = (e) => {
+        e.stopPropagation();
+        toggleVisibility(type, name, checkbox.checked);
+    };
+
+    const label = document.createElement('label');
+    label.textContent = name;
+
+    div.appendChild(checkbox);
+    div.appendChild(label);
+
+    div.onclick = () => selectItem(type, name);
+
+    return div;
+}
+
+function renderRegions() {
+    regionList.innerHTML = '';
+    const regions = state.layers.regions.features.map(f => f.properties.Nom_Region || f.properties.Nom_region || f.properties.NAME).sort();
+
+    regions.forEach(name => {
+        const isSelected = hierarchy.selectedRegion === name;
+        const isVisible = hierarchy.visible.regions.has(name);
+        regionList.appendChild(createListItem(name, 'region', isSelected, isVisible));
+    });
+}
+
+function renderDRs() {
+    drList.innerHTML = '';
+    const drs = state.layers.drs.features.map(f => f.properties.NAME).sort();
+
+    drs.forEach(name => {
+        const isSelected = hierarchy.selectedDR === name;
+        const isVisible = hierarchy.visible.drs.has(name);
+        drList.appendChild(createListItem(name, 'dr', isSelected, isVisible));
+    });
+}
+
+function renderProvinces() {
+    provinceList.innerHTML = '';
+    let provinces = state.layers.provinces.features;
+
+    // Filter by Region
+    if (hierarchy.selectedRegion) {
+        // Find Region Code
+        const rFeat = state.layers.regions.features.find(f => (f.properties.Nom_Region || f.properties.Nom_region || f.properties.NAME) === hierarchy.selectedRegion);
+        if (rFeat) {
+            const code = rFeat.properties.Code_Regio;
+            provinces = provinces.filter(p => p.properties.Code_Regio === code);
+        }
+    }
+    // Filter by DR
+    else if (hierarchy.selectedDR) {
+        const allowedProvinces = state.drToProvinces[hierarchy.selectedDR];
+        if (allowedProvinces) {
+            const normalize = (str) => String(str).trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+            const allowedSet = new Set(allowedProvinces.map(p => normalize(p)));
+
+            provinces = provinces.filter(p => {
+                const pName = p.properties.Nom_Provin || p.properties.Nom_provin || p.properties.NAME;
+                return allowedSet.has(normalize(pName));
+            });
+        }
+    }
+
+    const provinceNames = provinces.map(f => f.properties.Nom_Provin || f.properties.Nom_provin || f.properties.NAME).sort();
+    const uniqueNames = [...new Set(provinceNames)];
+
+    uniqueNames.forEach(name => {
+        const isSelected = hierarchy.selectedProvince === name;
+        const isVisible = hierarchy.visible.provinces.has(name);
+        provinceList.appendChild(createListItem(name, 'province', isSelected, isVisible));
+    });
+}
+
+function renderCommunes() {
+    communeList.innerHTML = '';
+    let communes = state.layers.communes.features;
+
+    if (hierarchy.selectedProvince) {
+        const pFeat = state.layers.provinces.features.find(f => (f.properties.Nom_Provin || f.properties.Nom_provin || f.properties.NAME) === hierarchy.selectedProvince);
+        if (pFeat) {
+            const code = pFeat.properties.Code_Provi;
+            communes = communes.filter(c => c.properties.Code_Provi === code);
+        }
+    } else {
+        // If no province selected, maybe show nothing? or all (too many!)?
+        // Show all but maybe limit?
+        // Let's show empty text if no province selected to save DOM
+        communeList.innerHTML = '<div style="padding:0.5rem; color:#aaa">Select a Province</div>';
+        return;
+    }
+
+    const communeNames = communes.map(f => f.properties.Nom_Commun || f.properties.Nom_commun || f.properties.NAME).sort();
+
+    communeNames.forEach(name => {
+        const isVisible = hierarchy.visible.communes.has(name);
+        communeList.appendChild(createListItem(name, 'commune', false, isVisible));
+    });
+}
+
+// --- Interaction Logic ---
+function selectItem(type, name) {
+    if (type === 'region') {
+        if (hierarchy.selectedRegion === name) {
+            hierarchy.selectedRegion = null;
+        } else {
+            hierarchy.selectedRegion = name;
+        }
+        hierarchy.selectedProvince = null;
+        hierarchy.selectedDR = null;
+
+        renderRegions();
+        renderDRs();
+        renderProvinces();
+        renderCommunes();
+
+        if (hierarchy.selectedRegion) {
+            const feat = state.layers.regions.features.find(f => (f.properties.Nom_Region || f.properties.Nom_region || f.properties.NAME) === name);
+            if (feat) {
+                const poly = L.geoJSON(feat);
+                map.fitBounds(poly.getBounds());
+            }
+        }
+
+    } else if (type === 'province') {
+        if (hierarchy.selectedProvince === name) {
+            hierarchy.selectedProvince = null;
+        } else {
+            hierarchy.selectedProvince = name;
+        }
+
+        renderProvinces();
+        renderCommunes();
+
+        if (hierarchy.selectedProvince) {
+            const feat = state.layers.provinces.features.find(f => (f.properties.Nom_Provin || f.properties.Nom_provin || f.properties.NAME) === name);
+            if (feat) {
+                const poly = L.geoJSON(feat);
+                map.fitBounds(poly.getBounds());
+            }
+        }
+
+    } else if (type === 'dr') {
+        if (hierarchy.selectedDR === name) {
+            hierarchy.selectedDR = null;
+        } else {
+            hierarchy.selectedDR = name;
+        }
+        hierarchy.selectedRegion = null;
+        hierarchy.selectedProvince = null;
+
+        renderDRs();
+        renderRegions();
+        renderProvinces();
+        renderCommunes();
+
+        if (hierarchy.selectedDR) {
+            const feat = state.layers.drs.features.find(f => f.properties.NAME === name);
+            if (feat) {
+                const poly = L.geoJSON(feat);
+                map.fitBounds(poly.getBounds());
+            }
+        }
+    }
+}
+
+function toggleVisibility(type, name, isChecked) {
+    const set = hierarchy.visible[type + 's']; // plural key
+    if (isChecked) set.add(name);
+    else set.delete(name);
+
+    // Update Map
+    updateMapVisibility(type);
+}
+
+function updateMapVisibility(type) {
+    const group = state.mapLayerGroups[type + 's'];
+    group.clearLayers();
+
+    const set = hierarchy.visible[type + 's'];
+    const layerData = state.layers[type + 's'];
+
+    if (!layerData) return;
+
+    const featuresToShow = layerData.features.filter(f => {
+        const n = f.properties.Nom_Region || f.properties.Nom_Provin || f.properties.Nom_Commun || f.properties.NAME || f.properties.Nom_region || f.properties.Nom_provin || f.properties.Nom_commun;
+        return set.has(n);
+    });
+
+    // Style
+    let style = { color: '#3388ff', weight: 1 };
+    if (type === 'region') style = (f) => ({ color: state.regionColors[f.properties.Nom_Region || f.properties.NAME] || '#3388ff', weight: 2, fillOpacity: 0.4 });
+    if (type === 'dr') style = (f) => ({ color: state.drColors[f.properties.NAME] || '#8b5cf6', weight: 2, fillOpacity: 0.4, dashArray: '5, 5' });
+    if (type === 'province') style = { color: '#10b981', weight: 1, fillOpacity: 0.1 };
+    if (type === 'commune') style = { color: '#ec4899', weight: 0.5, fillOpacity: 0.1 };
+
+    if (featuresToShow.length > 0) { // Optimization
+        L.geoJSON({ type: "FeatureCollection", features: featuresToShow }, {
+            style: style,
+            onEachFeature: (feature, layer) => {
+                const n = feature.properties.Nom_Region || feature.properties.Nom_Provin || feature.properties.Nom_Commun || feature.properties.NAME;
+                layer.bindPopup(n);
+            }
+        }).addTo(group);
+    }
+}
+
+resetRegionBtn.addEventListener('click', () => {
+    hierarchy.selectedRegion = null;
+    hierarchy.selectedProvince = null;
+    hierarchy.selectedDR = null;
+    renderRegions();
+    renderProvinces();
+    renderCommunes();
+    map.setView([31.7917, -7.0926], 6);
 });
 
 // --- Export ---
@@ -756,6 +915,9 @@ exportBtn.addEventListener('click', () => {
         'Auto_Commune': p.commune,
         'Auto_Province': p.province,
         'Auto_Region': p.region,
+        'Coverage_2G': p['2G'],
+        'Coverage_3G': p['3G'],
+        'Coverage_4G': p['4G'],
         'Emergency_141': p['141'],
         'Emergency_5757': p['5757'],
         'Emergency_15': p['15'],
@@ -909,11 +1071,6 @@ addSiteBtn.addEventListener('click', () => {
     }, 100);
 });
 
-// --- Toggle Manual Add Form ---
-if (toggleManualAdd) {
-    toggleManualAdd.addEventListener('click', () => {
-        manualAddCard.classList.toggle('expanded');
-    });
-}
+
 // Start
 loadGeoData();

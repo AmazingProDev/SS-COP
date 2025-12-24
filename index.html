@@ -29,6 +29,22 @@
         <h1>SS-COP <span class="highlight">Analyzer</span></h1>
       </div>
       <div class="controls">
+        <!-- Search -->
+        <div class="nav-group">
+          <input type="text" id="siteSearchInput" placeholder="Search Site..." />
+          <button id="siteSearchBtn" class="btn icon-only" title="Search">🔍</button>
+        </div>
+
+        <!-- Manual Add -->
+        <div class="nav-group manual-add-group">
+          <input type="text" id="manualSiteName" placeholder="Name" class="small-input" />
+          <input type="number" id="manualLat" placeholder="Lat" step="any" class="small-input" />
+          <input type="number" id="manualLng" placeholder="Lng" step="any" class="small-input" />
+          <button id="addSiteBtn" class="btn primary icon-only" title="Add Site">+</button>
+        </div>
+
+        <div class="nav-divider"></div>
+
         <button id="exportHierarchyBtn" class="btn secondary">Export Hierarchy</button>
         <button id="exportBtn" class="btn secondary" disabled>Export Results</button>
       </div>
@@ -58,22 +74,35 @@
 
 
         <div class="card layers-card">
-          <h2>Active Layers</h2>
-          <div class="layer-toggle">
-            <input type="checkbox" id="toggleRegions">
-            <label for="toggleRegions">Regions</label>
+          <h2>Hierarchy & Layers</h2>
+
+          <div class="hierarchy-section">
+            <div class="section-header">
+              <h3>Regions</h3>
+              <button id="resetRegionBtn" class="btn icon-only small" title="Show All">↻</button>
+            </div>
+            <div id="regionList" class="scroll-list"></div>
           </div>
-          <div class="layer-toggle">
-            <input type="checkbox" id="toggleDRs" checked>
-            <label for="toggleDRs">DRs</label>
+
+          <div class="hierarchy-section">
+            <div class="section-header">
+              <h3>Directions Régionales (DR)</h3>
+            </div>
+            <div id="drList" class="scroll-list"></div>
           </div>
-          <div class="layer-toggle">
-            <input type="checkbox" id="toggleProvinces">
-            <label for="toggleProvinces">Provinces</label>
+
+          <div class="hierarchy-section">
+            <div class="section-header">
+              <h3>Provinces</h3>
+            </div>
+            <div id="provinceList" class="scroll-list"></div>
           </div>
-          <div class="layer-toggle">
-            <input type="checkbox" id="toggleCommunes">
-            <label for="toggleCommunes">Communes</label>
+
+          <div class="hierarchy-section">
+            <div class="section-header">
+              <h3>Communes</h3>
+            </div>
+            <div id="communeList" class="scroll-list"></div>
           </div>
         </div>
 
@@ -104,30 +133,7 @@
 
       <section class="content">
         <div class="map-container">
-          <div class="map-controls-overlay">
-            <div class="card control-card">
-              <h3>Search Site</h3>
-              <div class="search-box">
-                <input type="text" id="siteSearchInput" placeholder="Enter Site Name or ID" />
-                <button id="siteSearchBtn" class="btn primary icon-btn">🔍</button>
-              </div>
-            </div>
-
-            <div class="card control-card manual-add-collapsed">
-              <div class="card-header" id="toggleManualAdd">
-                <h3>Add Site Manually</h3>
-                <span class="toggle-icon">▼</span>
-              </div>
-              <div class="manual-form">
-                <input type="text" id="manualSiteName" placeholder="Site Name" />
-                <div class="coord-inputs">
-                  <input type="number" id="manualLat" placeholder="Latitude" step="any" />
-                  <input type="number" id="manualLng" placeholder="Longitude" step="any" />
-                </div>
-                <button id="addSiteBtn" class="btn primary">Add Site</button>
-              </div>
-            </div>
-          </div>
+          <!-- Controls moved to navbar -->
           <div id="map"></div>
           <div id="drLegend" class="map-legend" style="display: none;"></div>
         </div>
@@ -144,6 +150,7 @@
                   <th>Commune</th>
                   <th>Province</th>
                   <th>Region</th>
+                  <th>DR</th>
                   <th>141</th>
                   <th>5757</th>
                   <th>15</th>

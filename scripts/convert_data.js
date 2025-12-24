@@ -1,73 +1,39 @@
-import { open } from 'shapefile';
+import { exec } from 'child_process';
+import util from 'util';
 import fs from 'fs/promises';
 import path from 'path';
+
+const execPromise = util.promisify(exec);
 
 const INPUT_DIR = './Tables Régions_Provinces et communes';
 const OUTPUT_DIR = './public/data';
 
 const FILES_TO_CONVERT = [
-  { name: 'regions', file: 'DA_REGIONS_12R' },
-  { name: 'provinces', file: 'DA_PROVINCES_12R' },
-  { name: 'communes', file: 'DA_COMMUNES_12R' }
+  { name: 'regions', file: 'DA_REGIONS_12R.TAB' },
+  { name: 'provinces', file: 'DA_PROVINCES_12R.TAB' },
+  { name: 'communes', file: 'DA_COMMUNES_12R.TAB' }
 ];
 
 async function convert() {
   await fs.mkdir(OUTPUT_DIR, { recursive: true });
 
   for (const { name, file } of FILES_TO_CONVERT) {
-    console.log(`Converting ${name}...`);
+    const inputPath = path.join(INPUT_DIR, file);
+    const outputPath = path.join(OUTPUT_DIR, `${name}.json`);
+
+    console.log(`Converting ${file} to ${name}.json...`);
+
+    // Command: ogr2ogr -f GeoJSON -t_srs EPSG:4326 [output] [input]
+    // Added -lco COORDINATE_PRECISION=6 to reduce file size slightly if needed, but standard is fine.
+    const command = `ogr2ogr -f GeoJSON -t_srs EPSG:4326 "${outputPath}" "${inputPath}"`;
+
     try {
-      const source = await open(
-        path.join(INPUT_DIR, `${file}.shp`),
-        path.join(INPUT_DIR, `${file}.dbf`)
-      );
-
-      const geojson = await source.read();
-      let features = [];
-
-      // shapefile.read() returns one feature at a time if loop, 
-      // but read() effectively returns the whole object if we iterate properly or consume it.
-      // Actually source.read() returns {done, value}. We need to loop.
-
-      // Reset reader strategy for 'shapefile' library
-      // Correct usage:
-      // const features = [];
-      // let result;
-      // while (!(result = await source.read()).done) {
-      //   features.push(result.value);
-      // }
-      // This library handles it slightly differently if you just want everything?
-      // No, we must loop.
-
-      // Re-opening to be safe or just looping correctly
-    } catch (e) {
-      console.error("Error setup:", e);
+      const { stdout, stderr } = await execPromise(command);
+      if (stderr) console.error(`Warning/Error for ${name}:`, stderr);
+      console.log(`Successfully converted ${name}`);
+    } catch (error) {
+      console.error(`Failed to convert ${name}:`, error.message);
     }
-  }
-
-  // Refined approach
-  for (const { name, file } of FILES_TO_CONVERT) {
-    console.log(`Processing ${name}...`);
-    const features = [];
-    const source = await open(
-      path.join(INPUT_DIR, `${file}.shp`),
-      path.join(INPUT_DIR, `${file}.dbf`),
-      { encoding: 'utf-8' }
-    );
-
-    let result;
-    while (!(result = await source.read()).done) {
-      features.push(result.value);
-    }
-
-    const featureCollection = {
-      type: "FeatureCollection",
-      features: features
-    };
-
-    const outPath = path.join(OUTPUT_DIR, `${name}.json`);
-    await fs.writeFile(outPath, JSON.stringify(featureCollection));
-    console.log(`Saved ${outPath}`);
   }
 }
 

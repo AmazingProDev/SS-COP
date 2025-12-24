@@ -259,7 +259,77 @@ input[type="checkbox"] {
   cursor: pointer;
 }
 
-input[type="text"],
+/* --- Hierarchy Lists --- */
+.hierarchy-section {
+  margin-bottom: 1.5rem;
+}
+
+.hierarchy-section:last-child {
+  margin-bottom: 0;
+}
+
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+
+.section-header h3 {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+  margin: 0;
+}
+
+.scroll-list {
+  max-height: 150px;
+  overflow-y: auto;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.2);
+  padding: 0.25rem;
+}
+
+.list-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.4rem 0.6rem;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-size: 0.9rem;
+  color: var(--text-main);
+}
+
+.list-item:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+/* Selected item (Clicked/Filtered) */
+.list-item.selected {
+  background: rgba(99, 102, 241, 0.15);
+  border: 1px solid rgba(99, 102, 241, 0.3);
+}
+
+.list-item label {
+  flex: 1;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.btn.small {
+  padding: 0.2rem;
+  width: 20px;
+  height: 20px;
+  font-size: 0.7rem;
+}
+
 input[type="number"] {
   background: rgba(2, 6, 23, 0.6);
   border: 1px solid var(--border);
@@ -355,92 +425,50 @@ input[type="number"]:focus {
   /* Base level */
 }
 
-/* --- Map Overlay UI --- */
-.map-controls-overlay {
-  position: absolute;
-  top: 1rem;
-  left: 3.5rem;
-  /* Account for Leaflet zoom control */
-  z-index: 500;
-  /* Above map tiles */
+/* --- Navbar Controls --- */
+.controls {
   display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-  width: 320px;
-  pointer-events: none;
+  align-items: center;
+  gap: 1rem;
 }
 
-.map-controls-overlay .card {
-  pointer-events: auto;
-  background: rgba(15, 23, 42, 0.9);
-  /* More opaque for contrast against map */
-  padding: 1rem;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+.nav-group {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: rgba(15, 23, 42, 0.4);
+  padding: 0.25rem 0.5rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 255, 255, 0.05);
 }
 
-.map-controls-overlay h3 {
+.nav-group input {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  color: var(--text-main);
+  padding: 0.4rem 0.5rem;
   font-size: 0.85rem;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  margin: 0;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
+  min-width: 120px;
 }
 
-/* Search Box in Overlay */
-.search-box {
-  display: flex;
-  gap: 0.5rem;
-  margin-top: 0.5rem;
+.nav-group input:focus {
+  outline: none;
+  box-shadow: none;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 4px;
 }
 
-.search-box input {
-  flex: 1;
+.nav-group.manual-add-group input.small-input {
+  width: 80px;
+  min-width: 60px;
 }
 
-/* Manual Add Form */
-.manual-form {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-  margin-top: 1rem;
-}
-
-.coord-inputs {
-  display: flex;
-  gap: 0.5rem;
-}
-
-.coord-inputs input {
-  width: 50%;
-}
-
-.card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  cursor: pointer;
-  user-select: none;
-}
-
-.toggle-icon {
-  font-size: 0.8rem;
-  transition: transform 0.3s;
-}
-
-.expanded .toggle-icon {
-  transform: rotate(180deg);
-}
-
-.manual-add-collapsed .manual-form {
-  display: none;
-}
-
-.manual-add-collapsed.expanded .manual-form {
-  display: flex !important;
+.nav-divider {
+  width: 1px;
+  height: 24px;
+  background: rgba(255, 255, 255, 0.15);
+  margin: 0 0.25rem;
 }
 
 /* --- Table --- */

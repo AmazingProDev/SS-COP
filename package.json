@@ -14,8 +14,10 @@
   },
   "dependencies": {
     "@turf/turf": "^6.5.0",
+    "geotiff": "^2.1.4-beta.1",
     "leaflet": "^1.9.4",
     "leaflet-control-geocoder": "^3.3.1",
+    "proj4": "^2.20.2",
     "shapefile": "^0.6.6",
     "xlsx": "^0.18.5"
   }

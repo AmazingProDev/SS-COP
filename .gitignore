@@ -5,3 +5,6 @@ dist
 
 # Temporary Excel files
 ~*.xlsx
+
+# Large data files
+public/Planet/
