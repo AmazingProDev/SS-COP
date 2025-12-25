@@ -33,10 +33,40 @@ const state = {
 // --- Initialization ---
 const map = L.map('map').setView([31.7917, -7.0926], 6); // Centered on Morocco
 
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+// --- Base Maps ---
+const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
     maxZoom: 19
-}).addTo(map);
+});
+
+const googleSat = L.tileLayer('http://{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}', {
+    maxZoom: 20,
+    subdomains: ['mt0', 'mt1', 'mt2', 'mt3']
+});
+
+const googleHybrid = L.tileLayer('http://{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', {
+    maxZoom: 20,
+    subdomains: ['mt0', 'mt1', 'mt2', 'mt3']
+});
+
+const googleTerrain = L.tileLayer('http://{s}.google.com/vt/lyrs=p&x={x}&y={y}&z={z}', {
+    maxZoom: 20,
+    subdomains: ['mt0', 'mt1', 'mt2', 'mt3']
+});
+
+// Set distinct base maps
+const baseMaps = {
+    "Standard": osm,
+    "Satellite": googleSat,
+    "Hybrid": googleHybrid,
+    "Terrain": googleTerrain
+};
+
+// Add default layer
+googleHybrid.addTo(map);
+
+// Add layer control
+L.control.layers(baseMaps).addTo(map);
 
 // Add Geocoder
 L.Control.geocoder({
@@ -193,13 +223,13 @@ async function loadGeoData() {
             // Store in state for UI filtering
             drMap.forEach((v, k) => state.drToProvinces[k] = v);
 
-            // Set all DRs to visible by default
-            if (state.drToProvinces) {
-                Object.keys(state.drToProvinces).forEach(drName => {
-                    hierarchy.visible.drs.add(drName);
-                });
-                hierarchy.visible.drs.add('DRR'); // Exceptions target
-            }
+            // Set all DRs to hidden by default (user request)
+            // if (state.drToProvinces) {
+            //     Object.keys(state.drToProvinces).forEach(drName => {
+            //         hierarchy.visible.drs.add(drName);
+            //     });
+            //     hierarchy.visible.drs.add('DRR'); // Exceptions target
+            // }
 
             // Assign Colors to DRs
             const palette = [
@@ -237,11 +267,11 @@ async function loadGeoData() {
         updateStatus(false);
 
         // Initialize Visibility Sets
-        // Regions: All visible by default
-        state.layers.regions.features.forEach(f => {
-            const name = f.properties.Nom_Region || f.properties.Nom_region || f.properties.NAME;
-            if (name) hierarchy.visible.regions.add(name);
-        });
+        // Regions: Hidden by default (user request)
+        // state.layers.regions.features.forEach(f => {
+        //     const name = f.properties.Nom_Region || f.properties.Nom_region || f.properties.NAME;
+        //     if (name) hierarchy.visible.regions.add(name);
+        // });
 
         // DRs: All visible by default (handled in DR logic, but good to confirm)
         // Provinces/Communes: Hidden by default (sets empty)
