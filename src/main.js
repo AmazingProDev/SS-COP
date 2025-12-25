@@ -1074,3 +1074,41 @@ addSiteBtn.addEventListener('click', () => {
 
 // Start
 loadGeoData();
+// --- Resize Logic ---
+const resizeHandle = document.getElementById('resizeHandle');
+const tableContainer = document.getElementById('tableContainer');
+let isResizing = false;
+
+resizeHandle.addEventListener('mousedown', (e) => {
+    isResizing = true;
+    document.body.style.cursor = 'row-resize';
+    e.preventDefault(); // Prevent text selection
+});
+
+document.addEventListener('mousemove', (e) => {
+    if (!isResizing) return;
+
+    // Calculate new height based on mouse position
+    // We want the height to be the distance from the bottom of the container to the mouse Y
+    // But since it's a flex item at the bottom, we can perhaps just set height directly based on container bottom - mouse Y
+
+    const containerRect = tableContainer.parentElement.getBoundingClientRect();
+    const newHeight = containerRect.bottom - e.clientY;
+
+    // Constraints
+    const minHeight = 150;
+    const maxHeight = containerRect.height - 100; // Leave some space for map
+
+    if (newHeight >= minHeight && newHeight <= maxHeight) {
+        tableContainer.style.height = `${newHeight}px`;
+    }
+});
+
+document.addEventListener('mouseup', () => {
+    if (isResizing) {
+        isResizing = false;
+        document.body.style.cursor = 'default';
+        // Trigger map resize if needed (Leaflet checks size periodically but good to force)
+        map.invalidateSize();
+    }
+});

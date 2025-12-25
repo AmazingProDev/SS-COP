@@ -474,6 +474,8 @@ input[type="number"]:focus {
 /* --- Table --- */
 .table-container {
   height: 320px;
+  min-height: 150px;
+  /* Prevent it from getting too small */
   display: flex;
   flex-direction: column;
   padding: 0;
@@ -482,6 +484,50 @@ input[type="number"]:focus {
   backdrop-filter: blur(12px);
   border-radius: var(--radius);
   overflow: hidden;
+  position: relative;
+  /* Important for absolute positioning of handle if needed, though flex item here */
+  flex-shrink: 0;
+  /* Don't shrink automatically */
+}
+
+/* Resize Handle */
+.resize-handle {
+  height: 12px;
+  width: 100%;
+  cursor: row-resize;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s;
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 20;
+}
+
+.resize-handle::after {
+  content: "";
+  width: 40px;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 2px;
+  transition: background 0.2s;
+}
+
+.resize-handle:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.resize-handle:hover::after {
+  background: rgba(255, 255, 255, 0.5);
+}
+
+/* Adjust header padding since handle is there */
+.table-header {
+  padding: 1.5rem 1.5rem 1rem;
+  /* Increased top padding */
+  border-bottom: var(--glass-border);
 }
 
 .table-header {
